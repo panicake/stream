@@ -32,29 +32,29 @@ func produceStudentChannel(students []*student) chan interface{} {
 	return out
 }
 
-func TestNewStream(t *testing.T) {
-	data := buildStudent(100)
-	maxId := NewStream(data).Parallel(5).Filter(func(t types.T) bool {
-		if t.(*student).ID > 15 && t.(*student).ID < 55 {
-			return true
+func getNum(num int) int {
+	flag := false
+	for i := 2; i < num; i++ {
+		if num % i == 0 {
+			flag = true
+			break
 		}
-		return false
-	}).Map(func(t types.T) types.R {
-		return t.(*student).ID
+	}
+	if flag {
+		return num
+	}
+	return 0
+}
+
+func BenchmarkNewStream(b *testing.B) {
+	fmt.Println(b.N)
+	data := buildStudent(b.N)
+	maxId := NewStream(data).Parallel(8).Map(func(t types.T) types.R {
+		return getNum(t.(*student).ID)
 	}).Max(func(a interface{}, b interface{}) int {
 		return a.(int) - b.(int)
 	})
-	t.Log(maxId)
-
-	count := NewStream(data).Parallel(5).Filter(func(t types.T) bool {
-		if t.(*student).ID > 15 && t.(*student).ID < 55 {
-			return true
-		}
-		return false
-	}).Map(func(t types.T) types.R {
-		return t.(*student).ID
-	}).Count()
-	t.Log(count)
+	b.Log(maxId)
 }
 
 func TestNewStreamFromChannel(t *testing.T) {

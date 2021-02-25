@@ -228,39 +228,21 @@ func (s *Stream) Parallel(threads int) types.IStream {
 
 // flow data stream flows
 func (s *Stream) flow(sink types.ISink) {
-	var channels []chan interface{}
-	for i := 0; i < s.threads; i++ {
-		ch := s.consume(s.in, sink)
-		channels = append(channels, ch)
-	}
-	var wg sync.WaitGroup
 	if s.out == nil {
 		s.out = make(chan interface{})
 	}
-	wg.Add(len(channels))
-	fanOut := func(c <-chan interface{}) {
-		for n := range c {
-			s.out <- n
-		}
-		wg.Done()
-	}
-	for _, ch := range channels {
-		go fanOut(ch)
+	var wg sync.WaitGroup
+	wg.Add(s.threads)
+	for i := 0; i < s.threads; i++ {
+		go func() {
+			sink.Flow(s.in, s.out)
+			wg.Done()
+		}()
 	}
 	go func() {
 		wg.Wait()
 		close(s.out)
 	}()
-}
-
-// consume consume each data in array with sink
-func (s *Stream) consume(in chan interface{}, sink types.ISink) chan interface{} {
-	out := make(chan interface{})
-	go func() {
-		sink.Flow(in, out)
-		close(out)
-	}()
-	return out
 }
 
 // Drive drives data stream flows from source to end
