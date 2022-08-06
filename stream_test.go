@@ -1,111 +1,102 @@
-package go_stream
+package stream
 
 import (
-	"fmt"
-	"github.com/lovermaker/stream/types"
+	"math/rand"
+	"sort"
+	"sync"
 	"testing"
 )
 
-type student struct {
-	ID   int
-	Name string
-}
-
-// buildStudent build array data
-func buildStudent(max int) []*student {
-	var data []*student
-	for i := 0; i < max; i++ {
-		data = append(data, &student{ ID: i, Name: fmt.Sprintf("Name-%d", i)})
-	}
-	return data
-}
-
-// produceStudentChannel build array data
-func produceStudentChannel(students []*student) chan interface{} {
-	out := make(chan interface{})
-	go func() {
-		for _, s := range students {
-			out <- s
-		}
-		close(out)
-	}()
-	return out
-}
-
-func getNum(num int) int {
-	flag := false
-	for i := 2; i < num; i++ {
-		if num % i == 0 {
-			flag = true
-			break
+func TestStreamFilter(t *testing.T) {
+	var expected []int
+	num := 500
+	for i := 0; i < num; i++ {
+		if i%3 == 0 {
+			expected = append(expected, i)
 		}
 	}
-	if flag {
-		return num
-	}
-	return 0
-}
-
-func BenchmarkNewStream(b *testing.B) {
-	fmt.Println(b.N)
-	data := buildStudent(b.N)
-	maxId := NewStream(data).Parallel(8).Map(func(t types.T) types.R {
-		return getNum(t.(*student).ID)
-	}).Max(func(a interface{}, b interface{}) int {
-		return a.(int) - b.(int)
-	})
-	b.Log(maxId)
-}
-
-func TestNewStreamFromChannel(t *testing.T) {
-	data := buildStudent(100)
-	count := NewStreamFromChannel(produceStudentChannel(data)).Parallel(5).Filter(func(t types.T) bool {
-		if t.(*student).ID > 15 && t.(*student).ID < 55 {
-			return true
-		}
-		return false
-	}).Map(func(t types.T) types.R {
-		return t.(*student).ID
-	}).Count()
-	t.Log(count)
-}
-
-func find(num int) int {
-	sum := 0
-	for i := num; i > 0; i-- {
-		if num % i == 0 {
-			sum += i
+	testFunc := func() {
+		threads := rand.Intn(50)
+		var result []int
+		var mu sync.Mutex
+		NewStream(func(in chan interface{}) {
+			for i := 0; i < num; i++ {
+				in <- i
+			}
+		}).Parallel(threads).Filter(func(i interface{}) bool {
+			return i.(int)%3 == 0
+		}).ForEach(func(i interface{}) {
+			mu.Lock()
+			result = append(result, i.(int))
+			mu.Unlock()
+		})
+		sort.Ints(result)
+		for index, value := range expected {
+			if result[index] != value {
+				t.Fatalf("expected value, %d, result value: %d", value, result[index])
+			}
 		}
 	}
-	return sum
+	for i := 0; i < 10; i++ {
+		testFunc()
+	}
+
 }
 
-func TestNewStreamExample(t *testing.T) {
-	nums := make([]int, 0)
+func TestStreamCountAndSum(t *testing.T) {
+	expectedSum := 0
+	expectedCount := 0
 	for i := 0; i < 100; i++ {
-		nums = append(nums, i)
-	}
-	sum := NewStream(nums).Parallel(10).Filter(func(t types.T) bool {
-		return t.(int) % 3 == 0
-	}).Map(func(t types.T) types.R {
-		num := t.(int)
-		return find(num)
-	}).Reduce(func(t types.T, u types.U) types.R {
-		return t.(int) + u.(int)
-	})
-	t.Log(sum)
-}
-
-func BenchmarkNewStreamExample2(b *testing.B) {
-	nums := make([]int, 0)
-	for i := 0; i < b.N; i++ {
-		nums = append(nums, i)
-	}
-	sum := 0
-	for _, value := range nums {
-		if value % 3 == 0 {
-			sum += find(value) / (value + 1)
+		if i%3 == 0 {
+			expectedSum += i
+			expectedCount += 1
 		}
 	}
-	b.Log(sum)
+	baseSteam := NewStream(func(in chan interface{}) {
+		for i := 0; i < 100; i++ {
+			in <- i
+		}
+	}).Filter(func(i interface{}) bool {
+		return i.(int)%3 == 0
+	})
+	count := baseSteam.Count()
+	sum := baseSteam.Reduce(func(i1, i2 interface{}) interface{} {
+		return i1.(int) + i2.(int)
+	}).(int)
+	if count != int64(expectedCount) {
+		t.Fatalf("expected value, %d, result value: %d", expectedCount, count)
+	}
+	if sum != expectedSum {
+		t.Fatalf("expected value, %d, result value: %d", expectedSum, sum)
+	}
+}
+
+func TestStreamDistinct(t *testing.T) {
+	num := 500
+	var expected []int
+	var list []int
+	for i := 0; i < num; i++ {
+		expected = append(expected, i)
+		len := rand.Intn(10) + 1
+		for j := 0; j < len; j++ {
+			list = append(list, i)
+		}
+	}
+	var result []int
+	var mu sync.Mutex
+	NewStream(func(in chan interface{}) {
+		for _, value := range list {
+			in <- value
+		}
+	}).Parallel(50).Distinct().ForEach(func(i interface{}) {
+		mu.Lock()
+		result = append(result, i.(int))
+		mu.Unlock()
+	})
+	sort.Ints(result)
+	for index, value := range expected {
+		if result[index] != value {
+			t.Fatalf("expected value, %d, result value: %d", value, result[index])
+		}
+	}
 }

@@ -1,16 +1,13 @@
-package sinks
+package stream
 
-import (
-	"github.com/lovermaker/stream/types"
-)
+import "sync"
 
-func init()  {
-	var _ types.ISink = &sliceSink{}
-}
+var _ Sink = &sliceSink{}
 
 type sliceSink struct {
-	skip     int64
-	limit    int64
+	skip  int64
+	limit int64
+	sync.Mutex
 }
 
 const MaxUint = ^uint64(0)
@@ -18,27 +15,29 @@ const MinUint = 0
 const MaxInt = int64(MaxUint >> 1)
 const MinInt = -MaxInt - 1
 
-func NewSliceSink(skip, limit int64) types.ISink  {
-	sliceSink := &sliceSink{
-		skip:       skip,
+func newSliceSink(skip, limit int64) Sink {
+	sink := &sliceSink{
+		skip: skip,
 	}
 	if limit >= 0 {
-		sliceSink.limit = limit
+		sink.limit = limit
 	} else {
-		sliceSink.limit = MaxInt
+		sink.limit = MaxInt
 	}
-	return sliceSink
+	return sink
 }
 
 func (s *sliceSink) Flow(in chan interface{}, out chan interface{}) {
 	for value := range in {
+		s.Lock()
 		if s.skip == 0 {
 			if s.limit > 0 {
 				s.limit--
 				out <- value
 			}
 		} else {
-			s.skip --
+			s.skip--
 		}
+		s.Unlock()
 	}
 }

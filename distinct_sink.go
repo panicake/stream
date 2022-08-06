@@ -1,18 +1,16 @@
-package sinks
+package stream
 
 import (
 	mapset "github.com/deckarep/golang-set"
-	"github.com/lovermaker/stream/types"
 )
 
-func init()  {
-	var _ types.ISink = &distinctSink{}
-}
+var _ Sink = &distinctSink{}
 
 type distinctSink struct {
 	set mapset.Set
 }
 
+// Flow data stream
 func (d *distinctSink) Flow(in chan interface{}, out chan interface{}) {
 	for value := range in {
 		if d.set.Add(value) {
@@ -21,7 +19,7 @@ func (d *distinctSink) Flow(in chan interface{}, out chan interface{}) {
 	}
 }
 
-func NewDistinctSink() types.ISink {
+func newDistinctSink() Sink {
 	return &distinctSink{
 		set: mapset.NewSet(),
 	}

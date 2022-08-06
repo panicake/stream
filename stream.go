@@ -1,236 +1,198 @@
-package go_stream
+package stream
 
 import (
-	"github.com/lovermaker/stream/operation"
-	"github.com/lovermaker/stream/sinks"
-	"github.com/lovermaker/stream/types"
-	"reflect"
 	"sync"
 )
 
-func init() {
-	var _ types.IStream = &Stream{}
-	var _ types.StreamHelper = &Stream{}
-}
-
-type sinkGetter func() types.ISink
-
-// Stream array concurrent types.IStream
+// Stream array concurrent Stream
 type Stream struct {
-	threads      int
-	sourceStream *Stream
-	nextSteam    *Stream
-	in           chan interface{}
-	out          chan interface{}
-	OnSink       sinkGetter
+	head    *Stream
+	next    *Stream
+	in      chan interface{}
+	out     chan interface{}
+	sink    Sink
+	threads int
 }
 
-// NewStream init a data stream from a slice
-func NewStream(array interface{}) types.IStream {
+// NewStream init data stream from channel
+func NewStream(source DataSource) *Stream {
 	stream := &Stream{
 		threads: 1,
+		sink: SinkFunc(func(in, out chan interface{}) {
+			source(out)
+		}),
 	}
-	kind := reflect.TypeOf(array).Kind()
-	if kind == reflect.Slice {
-		stream.out = make(chan interface{})
-		go func() {
-			arrayValue := reflect.ValueOf(array)
-			for i := 0; i < arrayValue.Len(); i++ {
-				stream.out <- arrayValue.Index(i).Interface()
-			}
-			close(stream.out)
-		}()
-	}
-	stream.sourceStream = stream
+	stream.head = stream
 	return stream
 }
 
-// NewStreamFromChannel init data stream from channel
-func NewStreamFromChannel(in chan interface{}) types.IStream {
-	stream := &Stream{
-		threads: 1,
+// Parallel set threads count of Stream
+func (s *Stream) Parallel(threads int) *Stream {
+	if threads < 1 {
+		threads = 1
 	}
-	stream.out = make(chan interface{})
-	go func() {
+	next := s.spawn(SinkFunc(func(in, out chan interface{}) {
 		for value := range in {
-			stream.out <- value
+			out <- value
 		}
-		close(stream.out)
-	}()
-	stream.sourceStream = stream
-	return stream
+	}))
+	next.threads = threads
+	return next
 }
 
 // Filter returns a stream consisting of elements filtered by predicate
-func (s *Stream) Filter(predicate types.Predicate) types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewFilterSink(predicate)
-	})
-	return stream
+func (s *Stream) Filter(predicate Predicate) *Stream {
+	return s.spawn(newFilterSink(predicate))
 }
 
 // Map returns a stream consisting of results of applying the given function to the elements
-func (s *Stream) Map(function types.Function) types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewMapSink(function)
-	})
-	return stream
+func (s *Stream) Map(mapper Mapper) *Stream {
+	return s.spawn(newMapSink(mapper))
 }
 
 // Peek returns a stream consisting of the elements of this stream, additionally performing
 // the provided action on each element as elements are consumed from the resulting stream
-func (s *Stream) Peek(action types.Consumer) types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewPeekSink(action)
-	})
-	return stream
+func (s *Stream) Peek(action Consumer) *Stream {
+	return s.spawn(newPeekSink(action))
 }
 
 // Limit returns a stream consisting of the elements of this stream, truncated to be no longer than maxSize in length
-func (s *Stream) Limit(maxSize int64) types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewSliceSink(0, maxSize)
-	})
-	return stream
+func (s *Stream) Limit(maxSize int64) *Stream {
+	return s.spawn(newSliceSink(0, maxSize))
 }
 
 // Skip returns a stream consisting of the remaining elements of this stream after
 // discarding the first n elements of th stream
 // if this stream contains fewer than n elements then an empty stream will be returned
-func (s *Stream) Skip(n int64) types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewSliceSink(n, -1)
-	})
-	return stream
+func (s *Stream) Skip(n int64) *Stream {
+	return s.spawn(newSliceSink(n, -1))
 }
 
 // Distinct returns a stream consisting of the distinct elements
-func (s *Stream) Distinct() types.IStream {
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewDistinctSink()
-	})
-	return stream
+func (s *Stream) Distinct() *Stream {
+	return s.spawn(newDistinctSink())
 }
 
 // Sorted returns a stream consisting of the sorted elements with comparator
-func (s *Stream) Sorted(comparator types.ComparatorFunc) types.IStream {
+func (s *Stream) Sorted(comparator ComparatorFunc) *Stream {
 	s.threads = 1
-	stream := s.spawn(func() types.ISink {
-		return sinks.NewSortSink(comparator)
-	})
-	return stream
+	return s.spawn(newSortSink(comparator))
+}
+
+// Counting returns a stream consisting of the count of elements
+func (s *Stream) Counting(count *int64) *Stream {
+	return s.spawn(newCountingSink(count))
 }
 
 // Max returns a stream consisting of the max element with comparator
-func (s *Stream) Max(comparator types.ComparatorFunc) interface{} {
-	maxOperator := types.BiFunctionFunc(func(a interface{}, b interface{}) interface{} {
+func (s *Stream) Max(comparator ComparatorFunc) interface{} {
+	maxOperator := ReduceFunc(func(a interface{}, b interface{}) interface{} {
 		if a == nil {
 			return b
 		}
 		if b == nil {
 			return a
 		}
-		if comparator.Compare(a, b) >= 0 {
+		if comparator.Compare(a, b) {
 			return a
 		}
 		return b
 	})
-	sink := sinks.NewReduceSink(maxOperator)
-	return s.evaluate(operation.NewReduceOp(sink)).(*sinks.ReduceSink).Get()
+	return s.evaluate(newReduceSink(maxOperator)).Get()
 }
 
 // Min returns a stream consisting of the min element with comparator
-func (s *Stream) Min(comparator types.ComparatorFunc) interface{} {
-	maxOperator := types.BiFunctionFunc(func(a interface{}, b interface{}) interface{} {
+func (s *Stream) Min(comparator ComparatorFunc) interface{} {
+	maxOperator := ReduceFunc(func(a interface{}, b interface{}) interface{} {
 		if a == nil {
 			return b
 		}
 		if b == nil {
 			return a
 		}
-		if comparator.Compare(a, b) <= 0 {
+		if !comparator.Compare(a, b) {
 			return a
 		}
 		return b
 	})
-	sink := sinks.NewReduceSink(maxOperator)
-	return s.evaluate(operation.NewReduceOp(sink)).(*sinks.ReduceSink).Get()
+	return s.evaluate(newReduceSink(maxOperator)).Get()
 }
 
 // Count returns the count of element of this stream
 func (s *Stream) Count() int64 {
-	return s.evaluate(operation.NewReduceOp(sinks.NewCountingSink())).Get().(int64)
+	return s.evaluate(newCountSink()).Get().(int64)
 }
 
 // Reduce performs a reduction  on the elements of this stream, using an associative accumulation function,
 // and returns an reduced value
-func (s *Stream) Reduce(function types.BiFunctionFunc) interface{} {
-	sink := sinks.NewReduceSink(function)
-	return s.evaluate(operation.NewReduceOp(sink)).Get()
+func (s *Stream) Reduce(reduce ReduceFunc) interface{} {
+	return s.evaluate(newReduceSink(reduce)).Get()
 }
 
 // FindFirst returns the first element of this stream or nil if the stream is empty
 func (s *Stream) FindFirst() interface{} {
 	s.threads = 1
-	return s.evaluate(operation.NewReduceOp(sinks.NewFindSink())).Get()
+	return s.evaluate(newFindSink()).Get()
 }
 
 // AnyMatch returns whether any elements of this stream match the provided predicate.
 // returns true if any elements of the stream match the provided predicate, otherwise false
-func (s *Stream) AnyMatch(predicate types.Predicate) bool {
-	return s.evaluate(operation.NewReduceOp(sinks.NewMatchSink(predicate, sinks.MatchAny))).Get().(bool)
+func (s *Stream) AnyMatch(predicate Predicate) bool {
+	return s.evaluate(newMatchSink(predicate, MatchAny)).Get().(bool)
 }
+
 // AllMatch returns whether all elements of this stream match the provided predicate.
-// returns true if either all elements of the stream match the provided predicate or the stream is empty, otherwise false
-func (s *Stream) AllMatch(predicate types.Predicate) bool {
-	return s.evaluate(operation.NewReduceOp(sinks.NewMatchSink(predicate, sinks.MatchAll))).Get().(bool)
+// returns true if either all elements of the stream match the provided predicate or the stream is empty,
+// otherwise false
+func (s *Stream) AllMatch(predicate Predicate) bool {
+	return s.evaluate(newMatchSink(predicate, MatchAll)).Get().(bool)
 }
 
 // NonMatch returns whether no elements of this stream match the provided predicate
 // returns true if either no elements of the stream match the provided predicate or the stream is empty, otherwise false
-func (s *Stream) NonMatch(predicate types.Predicate) bool {
-	return s.evaluate(operation.NewReduceOp(sinks.NewMatchSink(predicate, sinks.MathNone))).Get().(bool)
+func (s *Stream) NonMatch(predicate Predicate) bool {
+	return s.evaluate(newMatchSink(predicate, MathNone)).Get().(bool)
 }
 
 // ForEach performs an action for each element of this stream
-func (s *Stream) ForEach(action types.ConsumerFunc) {
-	s.evaluate(operation.NewReduceOp(sinks.NewForeachSink(action)))
+func (s *Stream) ForEach(consumer Consumer) {
+	s.evaluate(newForeachSink(consumer))
 }
 
 // Collect performs a mutable reduction operation on the elements of this stream using a collector
-func (s *Stream) Collect(collector types.Collector) interface{} {
-	s.ForEach(func(t types.T) {
+func (s *Stream) Collect(collector Collector) interface{} {
+	s.ForEach(func(t interface{}) {
 		collector.Receive(t)
 	})
-	return collector.Data()
-}
-
-// evaluate return a terminal sink evaluated by terminal operation
-func (s *Stream) evaluate(op types.TerminalOp) types.TerminalSink {
-	return op.Evaluate(s.spawn(nil))
+	return collector.Get()
 }
 
 // spawn new a stream connecting to the parent stream
-func (s *Stream) spawn(getter sinkGetter) *Stream {
-	if s.out == nil {
-		s.out = make(chan interface{})
-	}
-	newSteam := &Stream{sourceStream: s.sourceStream, in: s.out, threads: s.threads, OnSink: getter}
-	s.nextSteam = newSteam
-	return newSteam
+func (s *Stream) spawn(sink Sink) *Stream {
+	next := &Stream{head: s.head, threads: s.threads, sink: sink}
+	s.next = next
+	return next
 }
 
-// Parallel set threads count of types.IStream
-func (s *Stream) Parallel(threads int) types.IStream {
-	s.threads = threads
-	return s
+// clone a stream
+func (s *Stream) clone() *Stream {
+	return &Stream{
+		head:    s.head,
+		next:    s.next,
+		threads: s.threads,
+		in:      s.in,
+		out:     s.out,
+		sink:    s.sink,
+	}
+}
+
+// evaluate return a terminal sink evaluated by terminal operation
+func (s *Stream) evaluate(sink TerminalSink) TerminalSink {
+	return s.spawn(nil).drive(sink)
 }
 
 // flow data stream flows
-func (s *Stream) flow(sink types.ISink) {
-	if s.out == nil {
-		s.out = make(chan interface{})
-	}
+func (s *Stream) flow(sink Sink) {
 	var wg sync.WaitGroup
 	wg.Add(s.threads)
 	for i := 0; i < s.threads; i++ {
@@ -245,12 +207,22 @@ func (s *Stream) flow(sink types.ISink) {
 	}()
 }
 
-// Drive drives data stream flows from source to end
-func (s *Stream) Drive(sink types.TerminalSink) types.TerminalSink {
-	for p := s.sourceStream.nextSteam; p != nil; p = p.nextSteam {
-		if p.OnSink != nil {
-			p.flow(p.OnSink())
+// drive data stream flows from source to end
+func (s *Stream) drive(sink TerminalSink) TerminalSink {
+	for p := s.head; p != nil; p = p.next {
+		ins := p.clone()
+		if ins.out == nil {
+			ins.out = make(chan interface{})
 		}
+		if p.next != nil {
+			p.next.in = ins.out
+		}
+		if ins.sink != nil {
+			ins.flow(p.sink)
+		}
+	}
+	if s.out == nil {
+		s.out = make(chan interface{})
 	}
 	s.flow(sink)
 	sink.End(s.out)

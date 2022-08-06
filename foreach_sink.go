@@ -1,33 +1,31 @@
-package sinks
+package stream
 
-import (
-	"github.com/lovermaker/stream/types"
-)
-
-func init() {
-	var _ types.TerminalSink = &foreachSink{}
-}
+var _ TerminalSink = &foreachSink{}
 
 type foreachSink struct {
-	consumer types.Consumer
+	consumer Consumer
 }
 
+// End data stream
 func (f foreachSink) End(out chan interface{}) {
-	for range out {}
+	for range out {
+	}
 }
 
+// Get result
 func (f foreachSink) Get() interface{} {
 	return nil
 }
 
-func NewForeachSink(consumer types.Consumer) types.TerminalSink {
+func newForeachSink(consumer Consumer) TerminalSink {
 	return &foreachSink{
 		consumer: consumer,
 	}
 }
 
+// Flow data stream
 func (f foreachSink) Flow(in chan interface{}, out chan interface{}) {
 	for value := range in {
-		f.consumer.Accept(value)
+		f.consumer(value)
 	}
 }

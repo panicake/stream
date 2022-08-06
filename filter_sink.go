@@ -1,23 +1,18 @@
-package sinks
+package stream
 
-import (
-	"github.com/lovermaker/stream/types"
-)
-
-func init()  {
-	var _ types.ISink = &filterSink{}
-}
+var _ Sink = &filterSink{}
 
 type filterSink struct {
-	predicate  types.Predicate
+	predicate Predicate
 }
 
-func NewFilterSink(predicate  types.Predicate) types.ISink {
+func newFilterSink(predicate Predicate) Sink {
 	return &filterSink{
 		predicate: predicate,
 	}
 }
 
+// Flow data stream
 func (f filterSink) Flow(in chan interface{}, out chan interface{}) {
 	for value := range in {
 		if f.predicate(value) {
