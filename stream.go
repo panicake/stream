@@ -188,7 +188,7 @@ func (s *Stream) clone() *Stream {
 
 // evaluate return a terminal sink evaluated by terminal operation
 func (s *Stream) evaluate(sink TerminalSink) TerminalSink {
-	return s.spawn(nil).drive(sink)
+	return s.spawn(sink).drive(sink)
 }
 
 // flow data stream flows
@@ -209,22 +209,28 @@ func (s *Stream) flow(sink Sink) {
 
 // drive data stream flows from source to end
 func (s *Stream) drive(sink TerminalSink) TerminalSink {
-	for p := s.head; p != nil; p = p.next {
-		ins := p.clone()
-		if ins.out == nil {
-			ins.out = make(chan interface{})
+	head := s.head.clone()
+	p1 := s.head
+	p2 := head
+	for p1 != nil {
+		if p1.next != nil {
+			p2.next = p1.next.clone()
 		}
-		if p.next != nil {
-			p.next.in = ins.out
+		if p2.out == nil {
+			p2.out = make(chan interface{})
 		}
-		if ins.sink != nil {
-			ins.flow(p.sink)
+		if p2.next != nil {
+			p2.next.in = p2.out
 		}
+		if p2.sink != nil {
+			p2.flow(p2.sink)
+		}
+		// execute end function if at the end stream
+		if p2.next == nil {
+			sink.End(p2.out)
+		}
+		p1 = p1.next
+		p2 = p2.next
 	}
-	if s.out == nil {
-		s.out = make(chan interface{})
-	}
-	s.flow(sink)
-	sink.End(s.out)
 	return sink
 }
