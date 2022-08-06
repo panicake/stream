@@ -7,11 +7,15 @@ nums := make([]int, 0)
 for i := 0; i < 100; i++ {
     nums = append(nums, i)
 }
-sum := NewStream(nums).Filter(func(t types.T) bool {
+sum := NewStream(func(in chan interface{}) {
+		for _, value := range list {
+			in <- value
+		}
+}).Filter(func(t interface{}) bool {
     return t.(int) % 3 == 0
-}).Map(func(t types.T) types.R {
+}).Map(func(t interface{}) interface{} {
     return 2 * t.(int)
-}).Reduce(func(t types.T, u types.U) types.R {
+}).Reduce(func(t interface{}, u interface{}) interface{} {
     return t.(int) + u.(int)
 })
 fmt.Println(sum)
@@ -29,7 +33,7 @@ fmt.Println(sum)
 
 There are to ways to new a stream:
 
-* new a stream from a slice: `NewStream`
+* new a stream from a data source: `NewStream`
 
   ```go
   func main() {
@@ -37,39 +41,30 @@ There are to ways to new a stream:
       for i := 0; i < 100; i++ {
           nums = append(nums, i)
       }
-      count := NewStream(nums).Filter(func(t types.T) bool {
+      count := NewStream(func(in chan interface{}) {
+		for _, value := range list {
+			in <- value
+		}.Filter(func(t interface{}) bool {
           return t.(int) % 3 == 0
       }).Count()
       fmt.Println(count)
   }
   ```
 
-* new a stream from a channel: `NewStreamFromChannel`
+* new a stream from a slice data source: `NewStream`
 
   ```go
-  func produce(students []int) chan interface{} {
-  	out := make(chan interface{})
-  	go func() {
-  		for _, s := range students {
-  			out <- s
-  		}
-  		close(out)
-  	}()
-  	return out
-  }
   
   func main() {
       nums := make([]int, 0)
       for i := 0; i < 100; i++ {
           nums = append(nums, i)
       }
-     count := NewStreamFromChannel(produce(data)).Parallel(5).Filter(func(t types.T) bool {
+     count := NewStream(NewSliceDataSource(data)).Parallel(5).Filter(func(t interface{}) bool {
       	return t.(int) % 3 == 0
   	}).Count()
   }
   ```
-
-  the difference between `NewStream` and `NewStreamFromChannel` is that ``NewStreamFromChannel` `does not use reflection
 
 #### Supported Operations
 
